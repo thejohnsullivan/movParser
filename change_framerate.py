@@ -47,7 +47,7 @@ def dictifyAtom(data):
     atomDict = dict()
     while index < len(data):
         atom_header = data[index:index+ATOM_HEADER_SIZE]
-        # print('atom header:', atom_header)  # debug purposes
+        #print('atom header:', atom_header)  # debug purposes
         atom_size = struct.unpack('>I', atom_header[0:4])[0]
         atom_id = atom_header[4:8]
         atom_id_count = 0
@@ -58,7 +58,7 @@ def dictifyAtom(data):
             # print("entering {}".format(atom_id))
             atomDict[atom_id,atom_id_count] = dictifyAtom(data[index:index+atom_size])
         else:
-            atomDict[atom_id,atom_id_count] = (atom_size,data[index:index+atom_size])
+            atomDict[atom_id,atom_id_count] = data[index+ATOM_HEADER_SIZE:index+atom_size]
         index += atom_size
     return atomDict
 
@@ -72,13 +72,17 @@ def printAtomDict(d,tabs=''):
 
 def atomDictToBytes(atomDict):
     ret = b''
+    #print('keys: {}'.format(atomDict.keys()))
     for key in atomDict.keys():
-        print('key: ', key)  # debug purposes
-        ret += key[0]+struct.pack('>I',atomDict[key][0] )
+        #print('key: {}'.format(key))  # debug purposes
+        #print('atom: "{}"'.format(atomDict[key]))
         if key[0] in atomsWithSubs:
-            ret += atomDictToBytes(atomDict[key])
+            tmp = atomDictToBytes(atomDict[key])
+            ret += struct.pack('>I',len(tmp)+ATOM_HEADER_SIZE)+key[0]
+            ret += tmp
         else:
-            ret += atomDict[key][1]
+            ret += struct.pack('>I',len(atomDict[key])+ATOM_HEADER_SIZE)+key[0]
+            ret += atomDict[key]
     return ret
 
 def getSubAtom(data, atomID):
@@ -91,7 +95,7 @@ def getSubAtom(data, atomID):
             return data[index:index+atom_size]
         else:
             index += atom_size
-    raise RuntimeError('expected to find {} header.'.format(atomID)) 
+    raise RuntimeError('expected to find {} header.'.format(atomID))
 
 # search for moov item
 with open(args.filename, "r+") as f:
@@ -99,6 +103,7 @@ with open(args.filename, "r+") as f:
     moov = readAtomDataFromFile(f, b'moov')
 
     atomDict = dictifyAtom(moov)
+    print(atomDict)
     printAtomDict(atomDict)
 
     # trak = getSubAtom(moov, b'trak')
@@ -107,29 +112,20 @@ with open(args.filename, "r+") as f:
     # minf = getSubAtom(mdia, b'minf')
     # stbl = getSubAtom(minf, b'stbl')
     # stts = getSubAtom(stbl, b'stts')
-
-    mdhd = atomDict['trak',0]['mdia',0]['mdhd',0][1]
-
-    if mdhd[4:8] != b'mdhd':
+    try:
+        mdhd_data = atomDict['trak',0]['mdia',0]['mdhd',0]
+    except:
         raise RuntimeError('expected to find "mdhd" header.')
-    mdhd_size = struct.unpack('>I', mdhd[0:4])[0]
-    mdhd_data = mdhd[ATOM_HEADER_SIZE:]
-    if len(mdhd_data) < mdhd_size - ATOM_HEADER_SIZE:
-        raise RuntimeError('mdhd atom too short.')
     print("atom of length {}".format(len(mdhd_data)))
     version, flags,flags2, creationTime, \
             modTime, timeScale, duration, \
             lang, quality = struct.unpack('>BHBIIIIHH',mdhd_data[0:24])
     print("Found timescale of {}".format(timeScale))
 
-    stts = atomDict['trak',0]['mdia',0]['minf',0]['stbl',0]['stts',0][1]
-
-    if stts[4:8] != b'stts':
+    try:
+        stts_data = atomDict['trak',0]['mdia',0]['minf',0]['stbl',0]['stts',0]
+    except:
         raise RuntimeError('expected to find "stts" header.')
-    stts_size = struct.unpack('>I', stts[0:4])[0]
-    stts_data = stts[ATOM_HEADER_SIZE:]
-    if len(stts_data) < stts_size-ATOM_HEADER_SIZE:
-        raise RuntimeError('stts atom too short.')
     version, flags,flags2, numEntries = struct.unpack('>BHBI',stts_data[0:8])
     if numEntries > 1:
         raise RuntimeError('expected only one framerate')
@@ -138,22 +134,14 @@ with open(args.filename, "r+") as f:
     print("Found framerate of {} fps".format((float(timeScale)/float(sampleDuration))))
     newDuration = int(float(timeScale) / args.framerate)
     print("Writing new duration of {}".format(newDuration))
-    stts = stts[:ATOM_HEADER_SIZE+12]
-    stts += struct.pack('>I', newDuration)
-    atomDict['trak',0]['mdia',0]['minf',0]['stbl',0]['stts',0] = stts
+    stts_data = stts_data[:12]
+    stts_data += struct.pack('>I', newDuration)
+    atomDict['trak',0]['mdia',0]['minf',0]['stbl',0]['stts',0] = stts_data
 
     f.seek(-len(moov), 1) # go back to the beginning of moov
-    newMoov = atomDictToBytes(atomDict)
+    atoms = atomDictToBytes(atomDict)
+    newMoov = struct.pack('>I',len(atoms)+ATOM_HEADER_SIZE)+b'moov'
+    newMoov += atoms
     print('newMoov len {}, vs old {}'.format(len(newMoov),len(moov)))
-    # f.seek(ATOM_HEADER_SIZE+12,1)
-    # f.write(struct.pack('>I', newDuration))
+    f.write(newMoov)
     f.close()
-
-
-
-
-
-
-
-
-
