@@ -121,6 +121,35 @@ with open(args.filename, "r+") as f:
             modTime, timeScale, duration, \
             lang, quality = struct.unpack('>BHBIIIIHH',mdhd_data[0:24])
     print("Found timescale of {}".format(timeScale))
+    print("Found duration of {}".format(duration))
+    newTimeScale = args.framerate*1000
+    newDuration = int(float(duration) * (float(timeScale)/float(newTimeScale)))
+    print("New timescale of {}".format(newTimeScale))
+    print("New duration of {}".format(newDuration))
+    mdhd_data = struct.pack('>BHBIIIIHH',version, flags,flags2, creationTime, \
+                                        modTime, newTimeScale, newDuration, \
+                                        lang, quality)
+    atomDict['trak',0]['mdia',0]['mdhd',0] = mdhd_data
+
+    try:
+        mvhd_data = atomDict['mvhd',0]
+    except:
+        raise RuntimeError('expected to find "mvhd" header.')
+    print("atom of length {}".format(len(mvhd_data)))
+    version, flags,flags2, creationTime, \
+            modTime, timeScale, duration, \
+            prefRate, prefVolume = struct.unpack('>BHBIIIIII',mvhd_data[0:28])
+    mvhd_data_remainder = mvhd_data[28:]
+    print("Found timescale of {}".format(timeScale))
+    print("Found duration of {}".format(duration))
+    newTimeScale = args.framerate*1000
+    newDuration = int(float(duration) * (float(timeScale)/float(newTimeScale)))
+    print("New timescale of {}".format(newTimeScale))
+    print("New duration of {}".format(newDuration))
+    mvhd_data = struct.pack('>BHBIIIIII',version, flags,flags2, creationTime, \
+                                         modTime, newTimeScale, newDuration, \
+                                         prefRate, prefVolume) + mvhd_data_remainder
+    atomDict['mvhd',0] = mvhd_data
 
     try:
         stts_data = atomDict['trak',0]['mdia',0]['minf',0]['stbl',0]['stts',0]
