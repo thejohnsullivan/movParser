@@ -47,8 +47,8 @@ def dictifyAtom(data):
     atomDict = dict()
     while index < len(data):
         atom_header = data[index:index+ATOM_HEADER_SIZE]
-        #print('atom header:', atom_header)  # debug purposes
         atom_size = struct.unpack('>I', atom_header[0:4])[0]
+        print('atom header:{}, size {}'.format(atom_header, atom_size))  # debug purposes
         atom_id = atom_header[4:8]
         atom_id_count = 0
         for key in atomDict.keys():
@@ -66,7 +66,7 @@ def printAtomDict(d,tabs=''):
     if not isinstance(d,dict):
         return
     for key in d.keys():
-        print(tabs+str(key))
+        print(tabs+str(key)+": {}".format(len(d[key])))
         if key[0] in atomsWithSubs:
             printAtomDict(d[key],'  '+tabs)
 
@@ -106,14 +106,6 @@ with open(args.filename, "r+") as f:
     print(atomDict)
     printAtomDict(atomDict)
 
-    # trak = getSubAtom(moov, b'trak')
-    # mdia = getSubAtom(trak, b'mdia')
-    # mdhd = getSubAtom(mdia, b'mdhd')
-    # minf = getSubAtom(mdia, b'minf')
-    # stbl = getSubAtom(minf, b'stbl')
-    # stts = getSubAtom(stbl, b'stts')
-
-
     try:
         mvhd_data = atomDict['mvhd',0]
     except:
@@ -139,56 +131,77 @@ with open(args.filename, "r+") as f:
         if key[0] == 'trak':
             numTraks += 1
 
-    for i in [0]:
-        try:
-            mdhd_data = atomDict['trak',i]['mdia',0]['mdhd',0]
-        except:
-            raise RuntimeError('expected to find "mdhd" header.')
-        print("atom of length {}".format(len(mdhd_data)))
-        version, flags,flags2, creationTime, \
-                modTime, timeScale, duration, \
-                lang, quality = struct.unpack('>BHBIIIIHH',mdhd_data[0:24])
-        print("Found timescale of {}".format(timeScale))
-        print("Found duration of {}".format(duration))
+    #for i in range(numTraks):
+    i=0
+    try:
+        mdhd_data = atomDict['trak',i]['mdia',0]['mdhd',0]
+    except:
+        raise RuntimeError('expected to find "mdhd" header.')
+    version, flags,flags2, creationTime, \
+            modTime, timeScale, duration, \
+            lang, quality = struct.unpack('>BHBIIIIHH',mdhd_data[0:24])
+    print("mdhd: Found timescale of {}".format(timeScale))
+    print("mdhd: Found duration of {}".format(duration))
+    newTimeScale = args.framerate*1000
+    newDuration = int(float(duration) * (float(timeScale)/float(newTimeScale)))
+    print("mdhd: New timescale of {}".format(newTimeScale))
+    print("mdhd: New duration of {}".format(newDuration))
+    mdhd_data = struct.pack('>BHBIIIIHH',version, flags,flags2, creationTime, \
+                                        modTime, newTimeScale, newDuration, \
+                                        lang, quality)
+    atomDict['trak',i]['mdia',0]['mdhd',0] = mdhd_data
+
+    try:
+        tkhd_data = atomDict['trak',i]['tkhd',0]
+    except:
+        raise RuntimeError('expected to find "tkhd" header.')
+    version, flags,flags2, creationTime, \
+            modTime, trackId, res, \
+            duration = struct.unpack('>BHBIIIII',tkhd_data[0:24])
+    print("tkhd: Found duration of {}".format(duration))
+    print("tkhd: New duration of {}".format(newDuration))
+    tkhd_data = struct.pack('>BHBIIIII', version, flags,flags2, creationTime, \
+                                        modTime, trackId, res, \
+                                        newDuration) + tkhd_data[24:]
+    atomDict['trak',i]['tkhd',0] = tkhd_data
+
+    try:
+        stts_data = atomDict['trak',i]['mdia',0]['minf',0]['stbl',0]['stts',0]
+    except:
+        raise RuntimeError('expected to find "stts" header.')
+    version, flags,flags2, numEntries = struct.unpack('>BHBI',stts_data[0:8])
+    if numEntries > 1:
+        raise RuntimeError('expected only one framerate')
+    sampleCount, sampleDuration = struct.unpack('>II',stts_data[8:16])
+    print("stts: Found {} samples and {} duration".format(sampleCount,sampleDuration))
+    print("stts: Found framerate of {} fps".format((float(timeScale)/float(sampleDuration))))
+    newDuration = int(float(timeScale) / args.framerate)
+    print("stts: Writing new duration of {}".format(newDuration))
+    stts_data = stts_data[:12]
+    stts_data += struct.pack('>I', newDuration)
+    atomDict['trak',i]['mdia',0]['minf',0]['stbl',0]['stts',0] = stts_data
+
+    i=2
+    try:
+        stsd_data = atomDict['trak',i]['mdia',0]['minf',0]['stbl',0]['stsd',0]
+    except:
+        raise RuntimeError('expected to find "stsd" header.')
+    version, flags,flags2, numEntries = struct.unpack('>BHBI',stsd_data[0:8])
+    if numEntries > 1:
+        raise RuntimeError('expected only one sample description entry')
+    sdSize = struct.unpack('>I', stsd_data[8:12])[0]
+    format = stsd_data[12:16]
+    if format == b'tmcd':
+        res, res2, index = struct.unpack('>IHH',stsd_data[16:24])
+        print("stsd: Found {} of size {}".format(format, sdSize))
+        res, tmcdFlags, timeScale, frameDuration, numFrames = struct.unpack('>IIIIB',stsd_data[24:24+17])
+        print("stsd: Found {} timescale and {} duration".format(timeScale,frameDuration))
+        print("stsd: Found {} num frames".format(numFrames))
         newTimeScale = args.framerate*1000
-        newDuration = int(float(duration) * (float(timeScale)/float(newTimeScale)))
-        print("New timescale of {}".format(newTimeScale))
-        print("New duration of {}".format(newDuration))
-        mdhd_data = struct.pack('>BHBIIIIHH',version, flags,flags2, creationTime, \
-                                            modTime, newTimeScale, newDuration, \
-                                            lang, quality)
-        atomDict['trak',i]['mdia',0]['mdhd',0] = mdhd_data
-
-        try:
-            tkhd_data = atomDict['trak',i]['tkhd',0]
-        except:
-            raise RuntimeError('expected to find "tkhd" header.')
-        print("atom of length {}".format(len(mdhd_data)))
-        version, flags,flags2, creationTime, \
-                modTime, trackId, res, \
-                duration = struct.unpack('>BHBIIIII',tkhd_data[0:24])
-        print("Found duration of {}".format(duration))
-        print("New duration of {}".format(newDuration))
-        tkhd_data = struct.pack('>BHBIIIII', version, flags,flags2, creationTime, \
-                                            modTime, trackId, res, \
-                                            newDuration) + tkhd_data[24:]
-        atomDict['trak',i]['tkhd',0] = tkhd_data
-
-        try:
-            stts_data = atomDict['trak',i]['mdia',0]['minf',0]['stbl',0]['stts',0]
-        except:
-            raise RuntimeError('expected to find "stts" header.')
-        version, flags,flags2, numEntries = struct.unpack('>BHBI',stts_data[0:8])
-        if numEntries > 1:
-            raise RuntimeError('expected only one framerate')
-        sampleCount, sampleDuration = struct.unpack('>II',stts_data[8:16])
-        print("Found {} samples and {} duration".format(sampleCount,sampleDuration))
-        print("Found framerate of {} fps".format((float(timeScale)/float(sampleDuration))))
-        newDuration = int(float(timeScale) / args.framerate)
-        print("Writing new duration of {}".format(newDuration))
-        stts_data = stts_data[:12]
-        stts_data += struct.pack('>I', newDuration)
-        atomDict['trak',i]['mdia',0]['minf',0]['stbl',0]['stts',0] = stts_data
+        newFrameDuration = int(float(timeScale) / args.framerate)
+        print("stsd: New timescale of{} and new duration of {}".format(newTimeScale,newFrameDuration))
+        stsd_data = stsd_data[:32] + struct.pack('>II', newTimeScale, newFrameDuration) + stsd_data[32+8:]
+        atomDict['trak',i]['mdia',0]['minf',0]['stbl',0]['stsd',0] = stsd_data
 
     f.seek(-len(moov), 1) # go back to the beginning of moov
     atoms = atomDictToBytes(atomDict)
